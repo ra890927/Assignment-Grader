@@ -9,7 +9,6 @@ from argparse import ArgumentParser, Namespace
 from module.tester import Tester
 from module.compiler import Compiler
 
-
 class AssignmentGrader:
     def __init__(self, hw_id: int, problem_num: int, args: Namespace) -> None:
         self.args = args
@@ -30,14 +29,14 @@ class AssignmentGrader:
 
         self.check_environment()
 
-        if self.args.test_once:
+        if self.args.id != None:
             self.student_list = [self.args.id]
         else:
             with open(self.student_list_path, 'r') as f:
                 self.student_list = json.load(f)
 
         self.tester = Tester(problem_num, timeout=10)
-        self.compiler = Compiler(problem_num, self.exec_path)
+        self.compiler = Compiler(args.code_pat, problem_num, self.exec_path)
 
     def __reset_exec(self) -> None:
         if self.exec_path.exists():
@@ -53,8 +52,9 @@ class AssignmentGrader:
         assert self.test_root.is_dir(), 'Missing testdata'
 
     def preprocessing(self, std_id: str) -> bool:
+        zip_name = self.args.zip_pat.format(std_id, self.hw_id)
         assignment_root = glob(
-            rf'{self.assignments_root}/{std_id}*/{std_id}_hw_w{self.hw_id:02d}.zip')
+            rf'{self.assignments_root}/{std_id}*/{zip_name}')
         assert len(assignment_root) <= 1, 'Has same student id folder'
 
         if len(assignment_root) == 0:
@@ -64,12 +64,13 @@ class AssignmentGrader:
         copy(assignment_zip, self.exec_path)
         assignment_zip = Path(assignment_zip).name
 
-        call(f'cd {self.exec_path}; unzip {assignment_zip}', shell=True)
+        call(f'tar -xf {self.exec_path}/{assignment_zip} -C {self.exec_path}', shell=True)
 
         for pid in range(1, self.problem_num + 1):
             for i in range(1, 3):
                 inner_path = '*/' * i
-                find_res = glob(f'{self.exec_path}/{inner_path}{std_id}_hw_{pid:02d}.cpp')
+                code_name = self.args.code_pat.format(std_id, pid)
+                find_res = glob(f'{self.exec_path}/{inner_path}{code_name}')
                 if len(find_res):
                     pid_code_path = find_res[0]
                     copy(pid_code_path, self.exec_path)
@@ -97,9 +98,11 @@ class AssignmentGrader:
                 })
 
             records.append(record)
+            call('del *.obj', shell=True)
 
-        if not self.args.test_once:
+        if not self.args.id:
             rmtree(self.exec_path)
+        
         result_df = DataFrame.from_records(records)
         result_df.to_csv(f'hw_{self.hw_id:02d}.csv', index=False)
 
@@ -108,10 +111,14 @@ class AssignmentGrader:
 
 def parse_argument() -> Namespace:
     parser = ArgumentParser()
-    parser.add_argument('assignment', type=int)
-    parser.add_argument('problems', type=int)
-    parser.add_argument('-t', '--test_once', action='store_true')
-    parser.add_argument('--id', type=str)
+    parser.add_argument('assignment', type=int, help='Assignment id')
+    parser.add_argument('problems', type=int, help='The number of homework')
+    parser.add_argument('--id', type=str, help='Test specific student id')
+    parser.add_argument('--pid_mask', type=int, nargs='*', help='Test pids')
+    parser.add_argument('--zip_pat', type=str, default='{}_hw_w{:02d}.zip',
+                                                help='The pattern for zip file')
+    parser.add_argument('--code_pat', type=str, default='{}_hw_{:02d}.cpp',
+                                                help='The pattern for code file')
     return parser.parse_args()
 
 
@@ -119,6 +126,8 @@ def main() -> None:
     args = parse_argument()
     assignment = args.assignment
     problems = args.problems
+    args.pid_mask = list(map(int, args.pid_mask)) if len(args.pid_mask) \
+                    else [pid for pid in range(1, problems + 1)]
 
     grader = AssignmentGrader(assignment, problems, args)
     grader.grade()
